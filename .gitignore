@@ -1,0 +1,38 @@
+# ---- Python ----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# ---- Virtual Environment ----
+venv/
+env/
+ENV/
+.venv/
+Scripts/
+Lib/
+Include/
+
+# ---- Machine Learning Model Files ----
+*.joblib
+*.pkl
+*.sav
+
+# ---- Environment & Config ----
+.env
+*.env
+.DS_Store
+
+# ---- IDE / Editor ----
+.vscode/
+.idea/
+
+# ---- OS Files ----
+Thumbs.db
+desktop.ini
+
+# ---- Build / Test Artifacts ----
+*.egg-info/
+.cache/
+pytest_cache/
