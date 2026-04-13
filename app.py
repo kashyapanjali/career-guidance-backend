@@ -3,9 +3,26 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import joblib
 import os
+import re as _re
+import requests as http_requests
+from dotenv import load_dotenv
+import google.generativeai as genai
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+# Configure Gemini AI
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel("gemini-2.0-flash")
+    print("Gemini AI configured successfully")
+else:
+    gemini_model = None
+    print("WARNING: GEMINI_API_KEY not set. Chatbot will use fallback responses.")
 
 # Paths to saved model and encoder
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -357,7 +374,7 @@ def normalize_cgpa(cgpa):
             return cgpa_val / 10
         else:
             return min(cgpa_val / 100, 1)
-    except:
+    except (ValueError, TypeError):
         return 0.5  # Default normalized score
 
 def get_career_recommendations(user_data):
@@ -424,6 +441,20 @@ def predict():
     if not data:
         return jsonify({'error': 'Invalid or missing JSON payload'}), 400
 
+    # Mapping skills to likely interests
+    SKILL_TO_INTERESTS = {
+        'Python': ['Data Science', 'Artificial Intelligence', 'Web Development'],
+        'Java': ['Web Development', 'Mobile Apps', 'Entrepreneurship'],
+        'JavaScript': ['Web Development', 'Mobile Apps'],
+        'React': ['Web Development', 'Mobile Apps'],
+        'Machine Learning': ['Artificial Intelligence', 'Data Science', 'Research'],
+        'Data Analysis': ['Data Science', 'Business', 'Research'],
+        'IoT': ['Research', 'Entrepreneurship'],
+        'Cloud Computing': ['Web Development', 'Entrepreneurship'],
+        'UI/UX Design': ['Web Development', 'Entrepreneurship'],
+        'Digital Marketing': ['Business', 'Entrepreneurship'],
+    }
+
     try:
         # Extract user data
         name = data.get('name', 'Anonymous')
@@ -431,13 +462,16 @@ def predict():
         skills = data.get('skills', [])
         interests = data.get('interests', [])
         
-        # If only single interest provided (backward compatibility)
-        if not interests and 'interest' in data:
-            interests = [data['interest']]
+        # Auto-derive interests from skills when none provided
+        if not interests:
+            derived = []
+            for skill in skills:
+                derived.extend(SKILL_TO_INTERESTS.get(skill, []))
+            interests = list(dict.fromkeys(derived))  # dedupe, preserve order
         
         # Validate input
-        if not skills and not interests:
-            return jsonify({'error': 'Please provide at least skills or interests'}), 400
+        if not skills:
+            return jsonify({'error': 'Please provide at least one skill'}), 400
         
         # Get career recommendations
         recommendations = get_career_recommendations({
@@ -466,6 +500,7 @@ def predict():
                 'courses': primary['info']['courses'],
                 'roadmap': primary['info']['roadmap']
             },
+            'suggested_interests': interests,
             'alternatives': [
                 {
                     'career': alt['career'],
@@ -486,8 +521,563 @@ def predict():
     except Exception as e:
         return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
 
+# ---------- Resume Analysis ----------
+
+# Skills dictionary for resume parsing
+RESUME_SKILLS_DICT = [
+    # Programming Languages
+    "Python", "Java", "JavaScript", "TypeScript", "C", "C++", "C#", "Go", "Rust", "Ruby",
+    "PHP", "Swift", "Kotlin", "Scala", "R", "MATLAB", "Perl", "Shell", "Bash",
+    # Web Development
+    "HTML", "CSS", "React", "Angular", "Vue", "Vue.js", "Node.js", "Express", "Django",
+    "Flask", "Spring", "Spring Boot", "Next.js", "Nuxt.js", "Svelte", "jQuery",
+    "Bootstrap", "Tailwind", "SASS", "LESS", "WordPress",
+    # Data & ML
+    "Machine Learning", "Deep Learning", "TensorFlow", "PyTorch", "Keras", "Scikit-learn",
+    "Pandas", "NumPy", "Data Analysis", "Data Science", "NLP", "Computer Vision",
+    "Reinforcement Learning", "Neural Networks", "Random Forest", "SVM",
+    "Natural Language Processing", "Big Data", "Hadoop", "Spark", "Tableau", "Power BI",
+    "Excel", "Statistics", "Data Visualization", "Data Mining", "Data Engineering",
+    # Databases
+    "SQL", "MySQL", "PostgreSQL", "MongoDB", "Redis", "Firebase", "Cassandra",
+    "DynamoDB", "Oracle", "SQLite", "NoSQL", "GraphQL",
+    # Cloud & DevOps
+    "AWS", "Azure", "GCP", "Google Cloud", "Docker", "Kubernetes", "CI/CD",
+    "Jenkins", "Terraform", "Ansible", "Linux", "Git", "GitHub", "GitLab",
+    "Cloud Computing", "Microservices", "REST API", "API Development",
+    # Mobile
+    "Android", "iOS", "React Native", "Flutter", "SwiftUI", "Xamarin",
+    # Security
+    "Cybersecurity", "Network Security", "Ethical Hacking", "Penetration Testing",
+    "SIEM", "Risk Assessment", "Cryptography", "OWASP",
+    # Design
+    "UI/UX Design", "Figma", "Adobe XD", "Sketch", "Photoshop", "Illustrator",
+    "User Research", "Wireframing", "Prototyping",
+    # Business & Marketing
+    "Digital Marketing", "SEO", "SEM", "Google Analytics", "Content Marketing",
+    "Social Media Marketing", "Project Management", "Agile", "Scrum", "JIRA",
+    "Business Analysis", "Communication", "Leadership",
+    # IoT & Embedded
+    "IoT", "Arduino", "Raspberry Pi", "Embedded Systems",
+    # Other
+    "Blockchain", "Smart Contracts", "Solidity", "Game Development", "Unity", "Unreal Engine",
+    "3D Modeling", "Blender", "AutoCAD", "SolidWorks",
+]
+
+def extract_text_from_pdf(file_stream):
+    """Extract text from a PDF file stream"""
+    try:
+        from PyPDF2 import PdfReader
+        reader = PdfReader(file_stream)
+        text = ""
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+        return text
+    except Exception as e:
+        raise ValueError(f"Failed to read PDF: {str(e)}")
+
+def extract_text_from_docx(file_stream):
+    """Extract text from a DOCX file stream"""
+    try:
+        from docx import Document
+        doc = Document(file_stream)
+        text = ""
+        for para in doc.paragraphs:
+            text += para.text + "\n"
+        # Also extract text from tables
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    text += cell.text + " "
+                text += "\n"
+        return text
+    except Exception as e:
+        raise ValueError(f"Failed to read DOCX: {str(e)}")
+
+def extract_skills_from_text(text):
+    """Extract skills from resume text using keyword matching"""
+    text_lower = text.lower()
+    found_skills = []
+    for skill in RESUME_SKILLS_DICT:
+        # Use word boundary matching for shorter skill names
+        skill_lower = skill.lower()
+        if len(skill_lower) <= 3:
+            # For short skills like "R", "C", "Go", "SQL" use word boundary regex
+            pattern = r'\b' + _re.escape(skill_lower) + r'\b'
+            if _re.search(pattern, text_lower):
+                found_skills.append(skill)
+        else:
+            if skill_lower in text_lower:
+                found_skills.append(skill)
+    return list(dict.fromkeys(found_skills))  # dedupe, preserve order
+
+def extract_cgpa_from_text(text):
+    """Extract CGPA/GPA from resume text using regex patterns"""
+    patterns = [
+        r'(?:CGPA|GPA|C\.G\.P\.A|G\.P\.A)\s*[:\-]?\s*(\d+\.?\d*)\s*(?:/\s*(\d+))?',
+        r'(?:CGPA|GPA)\s*(\d+\.?\d*)',
+        r'(\d+\.?\d*)\s*/\s*(?:10|4)\s*(?:CGPA|GPA)',
+        r'(?:percentage|percent|%)\s*[:\-]?\s*(\d+\.?\d*)',
+        r'(\d+\.?\d*)\s*%',
+    ]
+    
+    for pattern in patterns:
+        match = _re.search(pattern, text, _re.IGNORECASE)
+        if match:
+            value = float(match.group(1))
+            # If it has a scale denominator
+            if match.lastindex and match.lastindex >= 2 and match.group(2):
+                scale = float(match.group(2))
+                if scale == 4:
+                    value = value * 2.5  # Convert 4.0 scale to 10.0
+            # Validate range
+            if 0 < value <= 10:
+                return value
+            elif 10 < value <= 100:
+                return value  # Percentage
+    return 7.0  # Default CGPA if not found
+
+def extract_name_from_text(text):
+    """Try to extract candidate name from the first few lines of resume"""
+    lines = text.strip().split('\n')
+    for line in lines[:5]:  # Check first 5 lines
+        line = line.strip()
+        if not line:
+            continue
+        # Skip lines that look like headers, emails, phones, URLs
+        if _re.search(r'@|http|www\.|resume|curriculum|vitae|\d{5,}', line, _re.IGNORECASE):
+            continue
+        # Skip lines that are too long (likely paragraphs)
+        if len(line) > 50:
+            continue
+        # Check if it looks like a name (2-4 words, all alpha)
+        words = line.split()
+        if 1 <= len(words) <= 4 and all(_re.match(r'^[a-zA-Z\.\-]+$', w) for w in words):
+            return line
+    return "Resume Candidate"
+
+
+@app.route('/analyze-resume', methods=['POST'])
+def analyze_resume():
+    """
+    Analyze an uploaded resume file (PDF or DOCX).
+    
+    Expects multipart/form-data with a 'resume' file field.
+    
+    Returns the same JSON structure as /predict.
+    """
+    if 'resume' not in request.files:
+        return jsonify({'error': 'No resume file provided'}), 400
+    
+    file = request.files['resume']
+    if not file.filename:
+        return jsonify({'error': 'No file selected'}), 400
+    
+    filename = file.filename.lower()
+    
+    try:
+        # Extract text based on file type
+        if filename.endswith('.pdf'):
+            text = extract_text_from_pdf(file.stream)
+        elif filename.endswith('.docx'):
+            text = extract_text_from_docx(file.stream)
+        elif filename.endswith('.txt'):
+            text = file.stream.read().decode('utf-8', errors='ignore')
+        else:
+            return jsonify({'error': 'Unsupported file type. Please upload PDF, DOCX, or TXT.'}), 400
+        
+        if not text or len(text.strip()) < 20:
+            return jsonify({'error': 'Could not extract enough text from the file. Please try a different file.'}), 400
+        
+        # Extract information from resume
+        skills = extract_skills_from_text(text)
+        cgpa = extract_cgpa_from_text(text)
+        name = extract_name_from_text(text)
+        
+        if not skills:
+            return jsonify({'error': 'No recognizable skills found in the resume. Please ensure your resume lists your technical skills.'}), 400
+        
+        # Derive interests from skills
+        SKILL_TO_INTERESTS = {
+            'Python': ['Data Science', 'Artificial Intelligence', 'Web Development'],
+            'Java': ['Web Development', 'Mobile Apps', 'Entrepreneurship'],
+            'JavaScript': ['Web Development', 'Mobile Apps'],
+            'React': ['Web Development', 'Mobile Apps'],
+            'Machine Learning': ['Artificial Intelligence', 'Data Science', 'Research'],
+            'Data Analysis': ['Data Science', 'Business', 'Research'],
+            'IoT': ['Research', 'Entrepreneurship'],
+            'Cloud Computing': ['Web Development', 'Entrepreneurship'],
+            'UI/UX Design': ['Web Development', 'Entrepreneurship'],
+            'Digital Marketing': ['Business', 'Entrepreneurship'],
+            'Deep Learning': ['Artificial Intelligence', 'Data Science', 'Research'],
+            'TensorFlow': ['Artificial Intelligence', 'Data Science'],
+            'PyTorch': ['Artificial Intelligence', 'Data Science'],
+            'Docker': ['Web Development', 'Entrepreneurship'],
+            'Kubernetes': ['Web Development', 'Entrepreneurship'],
+            'AWS': ['Web Development', 'Entrepreneurship'],
+            'Azure': ['Web Development', 'Entrepreneurship'],
+            'Cybersecurity': ['Cybersecurity'],
+            'Network Security': ['Cybersecurity'],
+            'Flutter': ['Mobile Apps'],
+            'React Native': ['Mobile Apps'],
+            'SQL': ['Data Science', 'Business'],
+            'Tableau': ['Data Science', 'Business'],
+            'Power BI': ['Data Science', 'Business'],
+        }
+        
+        interests = []
+        for skill in skills:
+            interests.extend(SKILL_TO_INTERESTS.get(skill, []))
+        interests = list(dict.fromkeys(interests))
+        
+        # Get career recommendations
+        recommendations = get_career_recommendations({
+            'skills': skills,
+            'interests': interests,
+            'cgpa': cgpa
+        })
+        
+        if not recommendations:
+            return jsonify({'error': 'No career recommendations found'}), 400
+        
+        primary = recommendations[0]
+        alternatives = recommendations[1:4]
+        
+        response = {
+            'career': primary['career'],
+            'match_percentage': primary['score'],
+            'info': {
+                'companies': primary['info']['companies'],
+                'salary': primary['info']['salary'],
+                'skills': primary['info']['skills'],
+                'courses': primary['info']['courses'],
+                'roadmap': primary['info']['roadmap']
+            },
+            'suggested_interests': interests,
+            'alternatives': [
+                {
+                    'career': alt['career'],
+                    'match_percentage': alt['score']
+                } for alt in alternatives
+            ],
+            'analysis': {
+                'skill_match': primary['skill_match'],
+                'interest_match': primary['interest_match'],
+                'cgpa_score': primary['cgpa_score']
+            },
+            'extracted_data': {
+                'name': name,
+                'skills_found': skills,
+                'cgpa_detected': cgpa,
+                'resume_text_length': len(text)
+            }
+        }
+        
+        return jsonify(response)
+        
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        return jsonify({'error': f'Resume analysis failed: {str(e)}'}), 500
+
+
+# ---------- Roadmap Integration ----------
+
+
+
+CAREER_TO_ROADMAP_SLUG = {
+    "Data Scientist": "ai-data-scientist",
+    "Software Engineer": "backend",
+    "Web Developer": "frontend",
+    "ML Engineer": "mlops",
+    "Frontend Developer": "frontend",
+    "Data Analyst": "data-analyst",
+    "AI Researcher": "ai-data-scientist",
+    "Cybersecurity Analyst": "cyber-security",
+    "Business Analyst": "data-analyst",
+    "UI/UX Designer": "ux-design",
+    "Cloud Engineer": "devops",
+}
+
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/kamranahmedse/developer-roadmap/master/src/data/roadmaps"
+
+def _label_to_slug(label):
+    """Convert a node label to a content file slug"""
+    slug = label.lower().strip()
+    slug = _re.sub(r'[^a-z0-9\s-]', '', slug)
+    slug = _re.sub(r'\s+', '-', slug)
+    return slug
+
+def _parse_content_md(md_text):
+    """Parse roadmap.sh content markdown into structured data"""
+    lines = md_text.strip().split('\n')
+    title = ''
+    description_lines = []
+    resources = []
+    in_resources = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('# '):
+            title = stripped[2:].strip()
+            continue
+        if 'visit the following resources' in stripped.lower():
+            in_resources = True
+            continue
+        if in_resources and stripped.startswith('- ['):
+            # Parse resource line: - [@type@Title](URL)
+            match = _re.match(r'-\s*\[@(\w+)@(.+?)\]\((.+?)\)', stripped)
+            if match:
+                rtype, rtitle, rurl = match.groups()
+                resources.append({
+                    'type': rtype,
+                    'title': rtitle,
+                    'url': rurl
+                })
+        elif not in_resources and stripped:
+            description_lines.append(stripped)
+
+    return {
+        'title': title,
+        'description': ' '.join(description_lines),
+        'resources': resources
+    }
+
+
+@app.route('/roadmap/<career_name>', methods=['GET'])
+def get_roadmap(career_name):
+    """Fetch full roadmap node graph for visual rendering"""
+    try:
+        slug = CAREER_TO_ROADMAP_SLUG.get(career_name)
+        if not slug:
+            return jsonify({'error': f'No roadmap mapping for "{career_name}"'}), 404
+
+        url = f"https://roadmap.sh/{slug}.json"
+        resp = http_requests.get(url, timeout=15)
+        if resp.status_code != 200:
+            return jsonify({'error': 'Failed to fetch roadmap data'}), 502
+
+        data = resp.json()
+        raw_nodes = data.get('nodes', [])
+        raw_edges = data.get('edges', [])
+        title_obj = data.get('title', {})
+        roadmap_title = title_obj.get('page', title_obj.get('card', career_name))
+
+        # Build nodes for the frontend
+        nodes = []
+        for node in raw_nodes:
+            ntype = node.get('type', '')
+            label = (node.get('data') or {}).get('label', '')
+            if not label or ntype not in ('topic', 'subtopic', 'title'):
+                continue
+
+            pos = node.get('position', {})
+            style = node.get('style', {})
+            data_style = (node.get('data') or {}).get('style', {})
+            legend = (node.get('data') or {}).get('legend', {})
+
+            nodes.append({
+                'id': node.get('id', ''),
+                'type': ntype,
+                'label': label,
+                'x': pos.get('x', 0),
+                'y': pos.get('y', 0),
+                'width': style.get('width', node.get('width', 240)),
+                'height': style.get('height', node.get('height', 49)),
+                'legendColor': legend.get('color', ''),
+                'legendLabel': legend.get('label', ''),
+            })
+
+        # Sort by y then x
+        nodes.sort(key=lambda n: (n['y'], n['x']))
+
+        # Build edges
+        edges = []
+        for edge in raw_edges:
+            edge_style = edge.get('style', {})
+            edges.append({
+                'source': edge.get('source', ''),
+                'target': edge.get('target', ''),
+                'dashed': '8' in str(edge_style.get('strokeDasharray', '0')),
+            })
+
+        # Build sections (grouped topics with subtopics) for a simpler view
+        topics = []
+        subtopics_list = []
+        for n in nodes:
+            if n['type'] == 'topic':
+                topics.append({**n, 'subtopics': []})
+            elif n['type'] == 'subtopic':
+                subtopics_list.append(n)
+
+        for sub in subtopics_list:
+            best = None
+            best_d = float('inf')
+            for t in topics:
+                d = abs(sub['y'] - t['y'])
+                if d < best_d:
+                    best_d = d
+                    best = t
+            if best:
+                best['subtopics'].append(sub)
+
+        sections = []
+        for t in topics:
+            sections.append({
+                'id': t['id'],
+                'topic': t['label'],
+                'subtopics': [{'id': s['id'], 'label': s['label']} for s in t['subtopics']]
+            })
+
+        return jsonify({
+            'title': roadmap_title,
+            'slug': slug,
+            'sections': sections,
+            'nodes': nodes,
+            'edges': edges,
+        })
+
+    except http_requests.exceptions.Timeout:
+        return jsonify({'error': 'Request timed out'}), 504
+    except Exception as e:
+        return jsonify({'error': f'Failed to get roadmap: {str(e)}'}), 500
+
+
+@app.route('/roadmap/<career_name>/content/<node_id>', methods=['GET'])
+def get_roadmap_content(career_name, node_id):
+    """Fetch content/resources for a specific roadmap node from GitHub"""
+    try:
+        slug = CAREER_TO_ROADMAP_SLUG.get(career_name)
+        if not slug:
+            return jsonify({'error': 'Career not found'}), 404
+
+        # First, get the roadmap JSON to find the node's label
+        url = f"https://roadmap.sh/{slug}.json"
+        resp = http_requests.get(url, timeout=10)
+        if resp.status_code != 200:
+            return jsonify({'error': 'Failed to fetch roadmap'}), 502
+
+        data = resp.json()
+        node_label = None
+        for node in data.get('nodes', []):
+            if node.get('id') == node_id:
+                node_label = (node.get('data') or {}).get('label', '')
+                break
+
+        if not node_label:
+            return jsonify({'error': 'Node not found', 'title': '', 'description': '', 'resources': []}), 404
+
+        # Try to fetch content from GitHub
+        content_slug = _label_to_slug(node_label)
+        content_url = f"{GITHUB_RAW_BASE}/{slug}/content/{content_slug}@{node_id}.md"
+        
+        content_resp = http_requests.get(content_url, timeout=10)
+        if content_resp.status_code == 200:
+            parsed = _parse_content_md(content_resp.text)
+            return jsonify(parsed)
+        
+        # Fallback: return just the label as title
+        return jsonify({
+            'title': node_label,
+            'description': f'Learn about {node_label} to advance in your career path.',
+            'resources': []
+        })
+
+    except Exception as e:
+        return jsonify({
+            'title': 'Content unavailable',
+            'description': str(e),
+            'resources': []
+        }), 500
+
+
+# ---------- AI Chatbot ----------
+
+CHAT_SYSTEM_PROMPT = """You are an expert AI Career Counselor for computer science and IT students in India.
+Your role is to provide helpful, concise, and actionable career guidance.
+
+Topics you can help with:
+- Career path recommendations (Data Science, Software Engineering, Web Dev, ML, Cybersecurity, etc.)
+- Salary expectations in India (provide ranges in LPA)
+- Skills to learn and skill development roadmaps
+- Interview preparation tips
+- Resume building advice
+- Course and certification recommendations
+- Industry trends and job market insights
+- Internship and job search strategies
+
+Guidelines:
+- Keep responses concise (2-4 sentences max unless asked for details)
+- Use emojis occasionally to keep it friendly
+- Always relate advice to practical, actionable steps
+- When mentioning salaries, use Indian Rupee (₹) and LPA format
+- If asked something unrelated to careers/tech, politely redirect to career topics
+"""
+
+# Fallback knowledge base for when Gemini is unavailable
+CHAT_KB_FALLBACK = {
+    "salary": "💰 Salaries: Data Scientist ₹10-18 LPA, Software Engineer ₹6-12 LPA, ML Engineer ₹12-20 LPA, Cybersecurity ₹8-16 LPA.",
+    "skills": "🎯 Top skills: Python, JavaScript, React, ML, Cloud (AWS/Azure), SQL, Docker. Build projects to demonstrate them!",
+    "interview": "📝 Tips: 1) Practice DSA on LeetCode 2) Build portfolio 3) STAR-format answers 4) Research company 5) System design prep.",
+    "resume": "📄 Resume: 1 page, action verbs, quantify achievements, GitHub links, tailor per job, add certifications.",
+    "career": "🚀 Use our AI tool! Identify strengths → explore domains → do internships → network → get AI recommendations.",
+    "python": "🐍 Python: Great for Data Science, ML, Web (Django/Flask), Automation. Most versatile language!",
+    "machine learning": "🤖 ML: Python+Math → algorithms → Kaggle → TensorFlow/PyTorch → projects → apply. Try Andrew Ng courses!",
+    "web": "🌐 Web Dev: HTML/CSS → JS → React → Node.js → DBs → Deploy. Build 3-5 portfolio projects.",
+    "cloud": "☁️ Cloud: AWS/GCP/Azure basics → certify → Docker/K8s → Terraform → apply for cloud roles.",
+}
+
+
+@app.route('/chat', methods=['POST'])
+def chat():
+    """AI Chatbot endpoint powered by Gemini API"""
+    data = request.get_json(force=True, silent=True)
+    if not data or not data.get('message', '').strip():
+        return jsonify({'error': 'Message is required'}), 400
+
+    user_message = data['message'].strip()
+    chat_history = data.get('history', [])
+
+    # Try Gemini API first
+    if gemini_model:
+        try:
+            # Build conversation history for context
+            contents = []
+            # Add system prompt as first user message with model acknowledgment
+            contents.append({"role": "user", "parts": [CHAT_SYSTEM_PROMPT + "\n\nPlease acknowledge and follow these instructions."]})
+            contents.append({"role": "model", "parts": ["Understood! I'm your AI Career Counselor. I'll provide helpful, concise career guidance for CS/IT students in India. Ask me anything about careers, skills, salaries, interviews, or job search strategies! 🚀"]})
+
+            # Add chat history (last 10 messages for context window)
+            for msg in chat_history[-10:]:
+                role = "user" if msg.get('from') == 'user' else "model"
+                contents.append({"role": role, "parts": [msg.get('text', '')]})
+
+            # Add current message
+            contents.append({"role": "user", "parts": [user_message]})
+
+            response = gemini_model.generate_content(contents)
+            reply = response.text.strip()
+
+            return jsonify({'reply': reply, 'source': 'gemini'})
+
+        except Exception as e:
+            print(f"Gemini API error: {e}")
+            # Fall through to fallback
+
+    # Fallback: keyword-based responses
+    lo = user_message.lower()
+    reply = "🤔 I can help with: salary info, skills advice, interview tips, resume building, career paths, Python, ML, web dev, and cloud computing. Ask me anything!"
+    for keyword, response in CHAT_KB_FALLBACK.items():
+        if keyword in lo:
+            reply = response
+            break
+
+    return jsonify({'reply': reply, 'source': 'fallback'})
+
+
 if __name__ == '__main__':
-    # Use environment variables or defaults
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "True").lower() in ("1", "true", "yes")
     app.run(host='0.0.0.0', port=port, debug=debug)

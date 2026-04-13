@@ -1,294 +1,162 @@
-# AI-Powered Career Guidance System
+# Career Guidance App — Backend
 
-## Problem Statement
+Flask-based REST API that powers the AI Career Guidance System. Uses a Random Forest ML model, resume parsing, roadmap.sh integration, and Gemini AI chatbot.
 
-Many students are confused about choosing the right career path (higher studies, jobs, entrepreneurship, etc.). Traditional career counseling is manual, time-consuming, and biased.
-A web app with AI integration can provide personalized, data-driven career suggestions.
+---
 
-## Objective
+## Features
 
-* Help students decide their career path
-* Recommend courses, job roles, or higher study options based on:
-  * Skills
-  * Academic performance (CGPA)
-  * Interests
-  * Personality traits
+- **Career Prediction** — ML-based career recommendation using skills and CGPA
+- **Resume Analysis** — Extracts skills, CGPA, and name from PDF/DOCX/TXT resumes
+- **Career Roadmap** — Fetches interactive learning roadmaps from roadmap.sh
+- **AI Chatbot** — Gemini-powered career counselor with fallback keyword responses
+- **9 Career Profiles** — Data Scientist, Software Engineer, Web Developer, ML Engineer, Frontend Developer, Data Analyst, AI Researcher, Cybersecurity Analyst, Business Analyst
 
-## ⚙ System Architecture
+---
 
-```
-[ User Input ]
-     ↓
-(Web Form: Skills, CGPA, Interests, Personality Test)
-     ↓
-[ Data Preprocessing Layer ]
-   - Convert skills & interests into feature vectors
-   - Normalize academic scores
-     ↓
-[ AI/ML Model ]
-   - Classification model (Random Forest)
-   - Suggests Career Path (e.g., Software Engineer, Data Scientist, MBA, Research)
-     ↓
-[ Recommendation Engine ]
-   - Uses ML + NLP to suggest:
-       - Online Courses (Coursera, Udemy APIs)
-       - Job Roles (LinkedIn/Indeed APIs)
-       - Higher Study programs
-     ↓
-[ Web Application Dashboard ]
-   - Displays Recommended Career Path
-   - Graphs of skill-match percentage
-   - Suggested Learning Roadmap
-```
+## Tech Stack
 
-## 🛠 Tech Stack
+| Technology | Purpose |
+|---|---|
+| Flask | Web framework |
+| scikit-learn | ML model (Random Forest) |
+| pandas / numpy | Data processing |
+| joblib | Model serialization |
+| PyPDF2 / python-docx | Resume text extraction |
+| Google Generative AI | Gemini chatbot |
+| python-dotenv | Environment variable management |
 
-### Backend
-* **Flask** → Python backend to integrate AI models
-* **scikit-learn** → ML classification & recommendation
-* **pandas, numpy** → Data processing
-* **joblib** → Model serialization
-* **REST API** → To communicate between frontend & ML model
+---
 
-### Frontend
-* **React.js** → Modern, interactive UI
-* **TailwindCSS** → Styling
-* **Lucide React** → Icons
+## Installation
 
-### AI/ML Components
-* **Random Forest Classifier** → ML classification
-* **Feature Engineering** → Skills and interests vectorization
-* **Match Scoring** → Personalized career recommendations
-
-## Workflow Example
-
-1. **User Registration & Input**
-   * Students fill form: Name, CGPA, Skills (Python, Java, IoT), Interests (AI, Web Dev)
-
-2. **Data Processing**
-   * Convert skills & interests into numeric vectors
-   * Normalize CGPA/marks
-
-3. **ML Prediction**
-   * Model trained on dataset of students → career outcomes
-   * Predicts best-fit career path (e.g., "Data Scientist – 85% match")
-
-4. **Recommendation Engine**
-   * Suggests:
-     * Top 5 online courses (Coursera, Udemy)
-     * Job roles & companies hiring
-     * Higher study programs
-
-5. **Result Dashboard**
-   * Graph of career fit scores
-   * Career Roadmap (e.g., Learn TensorFlow → Do Internship → Apply for AI roles)
-
-## Example Output (For a Student)
-
-* **Predicted Career Path**: Data Scientist (85% match)
-* **Alternative Suggestions**: Software Engineer (75%), AI Researcher (70%)
-* **Recommended Courses**:
-  * "Machine Learning" – Coursera
-  * "Deep Learning Specialization" – Andrew Ng
-* **Suggested Companies**: TCS, Infosys, Google AI
-* **Learning Roadmap**:
-  * Learn TensorFlow → Kaggle Projects → Internship → Apply for DS roles
-
-## Getting Started
-
-### Prerequisites
-- Python 3.8+
-- Node.js 16+
-- npm or yarn
-
-### Backend Setup
-
-1. **Clone the repository**
 ```bash
-git clone <repository-url>
+# Go to the backend folder
 cd career-guidance-backend
-```
 
-2. **Create virtual environment**
-```bash
+# Create virtual environment
 python -m venv venv
-# Windows
+
+# Activate virtual environment
+# Windows:
 venv\Scripts\activate
-# macOS/Linux
+# macOS/Linux:
 source venv/bin/activate
-```
 
-3. **Install dependencies**
-```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-4. **Train the model**
-```bash
+# Train the ML model
 python train_model.py
-```
 
-5. **Run the backend server**
-```bash
+# Run the server
 python app.py
 ```
 
-The backend will be available at `http://localhost:5000`
+The server runs at `http://localhost:5000`
 
-### Frontend Setup
+---
 
-1. **Navigate to frontend directory**
-```bash
-cd ../career-guidance-frontend
+## Environment Variables
+
+Create a `.env` file in the backend root:
+
+```
+PORT=5000
+FLASK_DEBUG=True
+GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
-2. **Install dependencies**
-```bash
-npm install
-```
+> **Note:** If `GEMINI_API_KEY` is not set, the chatbot will use keyword-based fallback responses.
 
-3. **Start the development server**
-```bash
-npm start
-```
+---
 
-The frontend will be available at `http://localhost:3000`
-
-## 📡 API Endpoints
-
-### Backend Endpoints
+## API Endpoints
 
 | Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | Health check |
+|---|---|---|
+| `/` | GET | Health check (basic) |
 | `/health` | GET | Detailed health status |
-| `/predict` | POST | Get career recommendations |
-| `/careers` | GET | List all available careers |
-| `/career/<name>` | GET | Get specific career details |
+| `/predict` | POST | Get career recommendations from form data |
+| `/analyze-resume` | POST | Upload resume and get career recommendations |
+| `/careers` | GET | List all available career paths |
+| `/career/<name>` | GET | Get details of a specific career |
+| `/roadmap/<career_name>` | GET | Fetch interactive roadmap for a career |
+| `/roadmap/<career_name>/content/<node_id>` | GET | Fetch resources for a roadmap node |
+| `/chat` | POST | AI chatbot (Gemini-powered) |
 
-### Example API Usage
+---
 
-**Get Career Recommendations:**
+## API Usage Examples
+
+### Predict Career (Form)
+
 ```bash
 curl -X POST http://localhost:5000/predict \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "John Doe",
+    "name": "John",
     "cgpa": 8.5,
-    "skills": ["Python", "Machine Learning", "Data Analysis"],
-    "interests": ["Artificial Intelligence", "Data Science"]
+    "skills": ["Python", "Machine Learning", "Data Analysis"]
   }'
 ```
 
-**Response:**
-```json
-{
-  "career": "Data Scientist",
-  "match_percentage": 85,
-  "info": {
-    "companies": [...],
-    "salary": "₹10–18 LPA",
-    "skills": [...],
-    "courses": [...],
-    "roadmap": [...]
-  },
-  "alternatives": [
-    {
-      "career": "ML Engineer",
-      "match_percentage": 75
-    }
-  ]
-}
+### Analyze Resume
+
+```bash
+curl -X POST http://localhost:5000/analyze-resume \
+  -F "resume=@my_resume.pdf"
 ```
 
-## Features
+### Chat
 
-### Completed Features
-- **AI-Powered Analysis**: Advanced machine learning algorithms analyze user profile
-- **Personalized Paths**: Career suggestions tailored to unique skills, interests, and goals
-- **Learning Roadmap**: Curated course recommendations and step-by-step learning paths
-- **Career Growth**: Opportunities in top companies and emerging industries
-- **Multiple Career Profiles**: 9 comprehensive career paths with detailed information
-- **Match Scoring**: Intelligent scoring based on skills, interests, and academic performance
-- **Alternative Suggestions**: Multiple career options with match percentages
-- **Comprehensive Data**: Courses, companies, salaries, and learning roadmaps
+```bash
+curl -X POST http://localhost:5000/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "What skills do I need for data science?",
+    "history": []
+  }'
+```
 
-### Future Enhancements
-- **Chatbot Integration**: Interactive career counseling
-- **LinkedIn API Integration**: Real-time job opportunities
-- **Resume Analysis**: AI-powered resume optimization
-- **Personality Assessment**: MBTI integration for better matching
-- **Industry Trends**: Real-time market analysis
-- **Mentorship Network**: Connect with industry professionals
-
-## Model Performance
-
-- **Accuracy**: 99.1% on test dataset
-- **Model Type**: Random Forest Classifier
-- **Features**: 51 engineered features (skills, interests, CGPA)
-- **Dataset**: 450 synthetic samples across 9 career paths
-- **Cross-validation**: 5-fold CV with 98.5% average score
+---
 
 ## Project Structure
 
 ```
 career-guidance-backend/
-├── app.py                 # Flask application
-├── train_model.py         # Model training script
-├── requirements.txt       # Python dependencies
-├── models/                # Trained models
+├── app.py               # Flask app (all routes and logic)
+├── train_model.py       # ML model training script
+├── requirements.txt     # Python dependencies
+├── .env                 # Environment variables
+├── models/              # Trained ML model files
 │   ├── career_guidance_pipeline.joblib
 │   ├── label_encoder.joblib
 │   └── feature_names.joblib
-└── README.md              # This file
+├── test_api.py          # API test script
+└── README.md
 ```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Why This Project Stands Out
-
-**Real-world use case** (career guidance is in demand)  
-**Combines Web + AI + Recommendation Engine**  
-**Extendable** (you can add chatbot, LinkedIn scraping, or resume analysis later)  
-**Looks amazing on resume/LinkedIn** (shows full-stack + ML integration)  
-**Production-ready** with comprehensive error handling and validation  
-**Scalable architecture** with modular design  
-
-## Deployment
-
-### Backend Deployment (Heroku)
-```bash
-echo "web: python app.py" > Procfile
-
-# Deploy
-git add .
-git commit -m "Deploy backend"
-git push heroku main
-```
-
-### Frontend Deployment (Netlify/Vercel)
-```bash
-npm run build
-# Deploy build folder to your preferred platform
-```
-
-## Support
-
-If you have any questions or need help, please:
-- Open an issue on GitHub
-- Contact the development team
-- Check the documentation
 
 ---
 
-**Built with for students seeking their perfect career path!**
+## ML Model
+
+| Detail | Value |
+|---|---|
+| Algorithm | Random Forest Classifier |
+| Accuracy | ~99% on test dataset |
+| Features | 51 engineered features (skills, interests, CGPA) |
+| Dataset | 450 synthetic samples across 9 career paths |
+| Cross-validation | 5-fold CV with ~98.5% average score |
+
+---
+
+## How It Works
+
+1. User submits skills + CGPA (via form or resume upload)
+2. Backend extracts and processes features
+3. ML model predicts the best career match
+4. Scoring engine ranks all 9 careers by weighted match (skills 40%, interests 30%, CGPA 30%)
+5. Returns primary career, alternatives, courses, companies, and learning roadmap
+
+---
